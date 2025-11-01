@@ -12,7 +12,8 @@ The intensity `λ(t)` is calculated as:
 ## Installation
 
 ```bash
-pip install git+https://github.com/4423i/onhawkes.git
+pip install git+pip install git+https://github.com/4423i/Hawkes-On.git
+
 ```
 
 ## Usage
