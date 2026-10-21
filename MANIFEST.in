@@ -1,0 +1,2 @@
+include CONTRIBUTING.md ROADMAP.md
+recursive-include docs *.md
