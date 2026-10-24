@@ -24,29 +24,48 @@ class OnlineHawkesEstimator:
 
 
 class OnlineHawkesMLE:
+    """Projected interval-likelihood gradient updates with fixed beta.
 
-    def __init__(self, mu=0.1, alpha=0.5, beta=1.0, lr=0.01):
+    Observation starts at start_time with no prior excitation. Each update
+    consumes one event and the preceding event-free interval. Parameters are
+    held fixed when differentiating that interval's negative log-likelihood.
+    This stochastic approximation does not solve the full-history batch MLE.
+    No likelihood contribution after the last supplied event is included.
+    """
+
+    def __init__(self, mu=0.1, alpha=0.5, beta=1.0, lr=0.01, *, start_time=0.0):
+        if not all(np.isfinite(x) for x in (mu, alpha, beta, lr, start_time)):
+            raise ValueError("parameters and start_time must be finite")
+        if mu <= 0 or alpha < 0 or beta <= 0 or lr <= 0:
+            raise ValueError("require mu > 0, alpha >= 0, beta > 0, lr > 0")
         self.mu = mu
         self.alpha = alpha
         self.beta = beta
         self.lr = lr
-        self.last_t = None
+        self.last_t = start_time
         self.s = 0.0
 
     def update(self, t):
-        if self.last_t is not None:
-            dt = t - self.last_t
-            self.s *= np.exp(-self.beta * dt)
-        self.s += 1.0
+        """Return (updated_mu, updated_alpha, pre_event_intensity).
 
-        lam = self.mu + self.alpha * self.s
+        Intensity uses parameters before this update. Event times must be
+        finite and strictly greater than the previous observation time.
+        """
+        if not np.isfinite(t) or t <= self.last_t:
+            raise ValueError("event time must be finite and strictly increasing")
+        dt = t - self.last_t
+        decay = np.exp(-self.beta * dt)
+        integrated_s = self.s * (-np.expm1(-self.beta * dt) / self.beta)
+        pre_s = self.s * decay
+        lam = self.mu + self.alpha * pre_s
 
-        g_mu = -1 / lam + 1
-        g_alpha = -self.s / lam + self.s
+        g_mu = dt - 1 / lam
+        g_alpha = integrated_s - pre_s / lam
 
         self.mu = max(1e-8, self.mu - self.lr * g_mu)
-        self.alpha = max(1e-8, self.alpha - self.lr * g_alpha)
+        self.alpha = max(0.0, self.alpha - self.lr * g_alpha)
 
+        self.s = pre_s + 1.0
         self.last_t = t
         return self.mu, self.alpha, lam
 

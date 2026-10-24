@@ -63,10 +63,77 @@ class ExperimentalApiTests(unittest.TestCase):
         # A return-contract check only; it does not validate the gradient as MLE.
         model = OnlineHawkesMLE(mu=0.1, alpha=0.5, beta=1.0, lr=0.01)
         mu, alpha, lam = model.update(1.0)
-        self.assertAlmostEqual(lam, 0.6)
+        self.assertAlmostEqual(lam, 0.1)
+        self.assertAlmostEqual(mu, 0.19)
+        self.assertAlmostEqual(alpha, 0.5)
         self.assertEqual((mu, alpha), (model.mu, model.alpha))
         self.assertNotAlmostEqual(lam, mu + alpha * model.s)
         self.assertEqual(model.beta, 1.0)
+
+
+class OnlineLikelihoodTests(unittest.TestCase):
+    def test_interval_updates_match_finite_difference_likelihood(self):
+        # Independent full-history likelihood differences isolate each interval.
+        beta, start = 1.7, 2.0
+        times = [2.2, 2.20001, 3.1, 8.0]
+        model = OnlineHawkesMLE(0.8, 0.3, beta, lr=1e-4, start_time=start)
+
+        def nll(mu, alpha, end, events):
+            integral = mu * (end - start) + alpha / beta * math.fsum(
+                -math.expm1(-beta * (end - t)) for t in events
+            )
+            logs = math.fsum(
+                math.log(mu + alpha * math.fsum(
+                    math.exp(-beta * (t - past)) for past in events[:i]
+                )) for i, t in enumerate(events)
+            )
+            return integral - logs
+
+        for i, t in enumerate(times):
+            mu, alpha = model.mu, model.alpha
+            previous = start if i == 0 else times[i - 1]
+
+            def interval(m, a):
+                return (nll(m, a, t, times[:i + 1])
+                        - nll(m, a, previous, times[:i]))
+
+            h = 1e-5
+            g_mu = (interval(mu + h, alpha) - interval(mu - h, alpha)) / (2*h)
+            g_alpha = (interval(mu, alpha + h) - interval(mu, alpha - h)) / (2*h)
+            expected_lam = mu + alpha * math.fsum(
+                math.exp(-beta * (t - past)) for past in times[:i]
+            )
+            new_mu, new_alpha, lam = model.update(t)
+            with self.subTest(t=t):
+                self.assertAlmostEqual((mu - new_mu) / model.lr, g_mu, places=7)
+                self.assertAlmostEqual((alpha - new_alpha) / model.lr, g_alpha, places=7)
+                self.assertAlmostEqual(lam, expected_lam)
+
+    def test_waiting_time_affects_first_update(self):
+        short = OnlineHawkesMLE(mu=0.8)
+        long = OnlineHawkesMLE(mu=0.8)
+        short.update(0.5)
+        long.update(4.0)
+        self.assertGreater(short.mu, long.mu)
+
+    def test_invalid_event_does_not_change_state(self):
+        model = OnlineHawkesMLE(start_time=2.0)
+        model.update(3.0)
+        before = vars(model).copy()
+        for t in [2.0, 3.0, float('nan'), float('inf')]:
+            with self.assertRaises(ValueError):
+                model.update(t)
+            self.assertEqual(vars(model), before)
+
+    def test_parameter_validation(self):
+        for kwargs in [dict(mu=0), dict(alpha=-1), dict(beta=0),
+                       dict(lr=0), dict(start_time=float('nan'))]:
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                OnlineHawkesMLE(**kwargs)
+
+    def test_zero_excitation_and_projection(self):
+        model = OnlineHawkesMLE(mu=0.1, alpha=0.0, lr=1.0)
+        self.assertEqual(model.update(100.0), (1e-8, 0.0, 0.1))
 
 
 if __name__ == "__main__":

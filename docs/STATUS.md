@@ -5,7 +5,7 @@ This review describes the source in `onhawkes/estimator.py`, the package exports
 ## Implemented capabilities
 
 - `OnlineHawkesEstimator(mu, alpha, beta)` starts with baseline intensity and no prior excitation. `update(t)` decays the previous excess intensity, adds `alpha`, records `t`, and returns post-event intensity. It retains only parameters, `last_t`, and `intensity`. For fixed parameters and ordered events the recurrence is equivalent to summing exponential contributions including the current event.
-- `OnlineHawkesMLE(mu=0.1, alpha=0.5, beta=1.0, lr=0.01)` retains a decayed event count `s`. Each update adds the current event, computes `lam`, and applies the implemented gradients `-1/lam + 1` and `-s/lam + s` to `mu` and `alpha`. Both are clipped below at `1e-8`; `beta` is fixed. The return tuple mixes updated parameters with the intensity computed before the parameter update.
+- `OnlineHawkesMLE(..., start_time=0.0)` retains the post-event decayed count `s` and previous observation time. Each event applies an interval-likelihood gradient step with fixed `beta`, using pre-event intensity and exact integrated excitation. It projects `mu` to at least `1e-8` and `alpha` to at least zero. The return tuple contains updated parameters and pre-event intensity evaluated before the step.
 - `HawkesExp(t)` stores `np.asarray(t)` and sets `T` to the final time. `intensity(t, mu, alpha, beta)` directly sums contributions from stored events strictly earlier than the query. `loglik(params)` calculates a negative-log-likelihood-style objective. `fit(x0)` calls SciPy's L-BFGS-B with positive bounds and returns only `(res.x, res.fun)`.
 - `onhawkes/__init__.py` exports only `OnlineHawkesEstimator`. Experimental classes are available through `onhawkes.estimator`.
 - `pyproject.toml` defines a setuptools package, `onhawkes` version `0.1.0`, requiring Python 3.12+, NumPy, and SciPy. Dependency versions are unrestricted. The repository includes an MIT license.
@@ -40,7 +40,22 @@ Additional issues:
 
 ### Experimental online parameter updates
 
-The class name `OnlineHawkesMLE` overstates what has been established. The update uses post-event intensity and does not implement a documented full observation-window likelihood gradient. There is no gradient validation, decay-parameter estimation, learning-rate schedule, stationarity constraint, or convergence/uncertainty assessment. Its constant-size state does not establish estimator correctness.
+For a previous post-event count `s`, gap `dt`, and fixed `beta`, define
+
+```text
+pre_s = s * exp(-beta * dt)
+A = s * (-expm1(-beta * dt)) / beta
+lam = mu + alpha * pre_s
+interval_nll = mu * dt + alpha * A - log(lam)
+g_mu = dt - 1 / lam
+g_alpha = A - pre_s / lam
+```
+
+Each update differentiates this interval loss at the current parameters, takes a projected gradient step, then stores `pre_s + 1`. The first interval starts at `start_time` (default zero), with no prior excitation. The implementation uses `expm1` to avoid cancellation for small gaps. Parameters and event times are validated; tied or decreasing times are rejected. Invalid event inputs leave state unchanged.
+
+This corrects the former inclusion of the current event in its own intensity and the incorrect compensator gradients. `lam` now means pre-event intensity, evaluated before the parameter step. Independent finite differences of full-history likelihood differences verify the interval gradients.
+
+The class remains experimental: sequential steps at changing parameters do not optimize the accumulated likelihood exactly. There is no decay-parameter estimation, learning-rate schedule, stationarity constraint, or statistical convergence/parameter-recovery assessment. No event-free observation tail after the last event is processed.
 
 ## Tests and distribution
 
@@ -48,7 +63,7 @@ The repository initially contained no tests, CI workflows, coverage configuratio
 
 There is still no broad edge-case suite, CI/support matrix, statistical validation, reproducible performance baseline, or release automation. The package metadata alone does not establish that a PyPI release is available. Installation instructions therefore use source installation rather than assuming one.
 
-An editable install, the seven regression tests, the README example, and source/wheel builds were checked with Python 3.12. This is a single-environment check, not a supported-platform matrix. `MANIFEST.in` includes the new guides in source distributions so the README's local documentation links have targets there as well. The build emits a setuptools deprecation warning for the existing license classifier; migration to modern SPDX metadata remains a packaging follow-up.
+An editable install, the original seven regression tests, the README example, and source/wheel builds were checked with Python 3.12. This is a single-environment check, not a supported-platform matrix. `MANIFEST.in` includes the new guides in source distributions so the README's local documentation links have targets there as well. The build emits a setuptools deprecation warning for the existing license classifier; migration to modern SPDX metadata remains a packaging follow-up.
 
 ## Documentation findings addressed here
 
